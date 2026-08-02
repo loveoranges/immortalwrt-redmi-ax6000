@@ -34,6 +34,7 @@ env:
     luci-app-wol luci-i18n-wol-zh-cn
     luci-app-watchcat luci-i18n-watchcat-zh-cn
     luci-app-sqm luci-i18n-sqm-zh-cn sqm-scripts
+    kmod-tcp-bbr
     luci-i18n-base-zh-cn
     tcpdump mtr-json bind-dig ethtool
     v2ray-geoip v2ray-geosite
