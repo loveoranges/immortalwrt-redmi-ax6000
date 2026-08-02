@@ -88,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # GuNanOvO/openwrt-tailscale latest → packages/
+          # GuNanOvO/openwrt-tailscale latest → packages/ (apk name must be name-ver-rN.apk)
           mkdir -p packages
           url="$(curl -fsSL \
             -H "Authorization: Bearer ${{ github.token }}" \
@@ -96,7 +96,8 @@ jobs:
             "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest" \
             | jq -r --arg a "$PKG_ARCH" \
               '.assets[]|select(.name|endswith("_"+$a+".apk") and startswith("tailscale_"))|.browser_download_url')"
-          curl -fsSL -o "packages/$(basename "$url")" "$url"
+          ver="$(basename "$url" | cut -d_ -f2)"
+          curl -fsSL -o "packages/tailscale-${ver}-r1.apk" "$url"
 
           make image PROFILE="${PROFILE}" PACKAGES="${EXTRA_PACKAGES}"
 
