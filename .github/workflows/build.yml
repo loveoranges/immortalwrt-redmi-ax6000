@@ -93,20 +93,20 @@ jobs:
 
           make image PROFILE="${PROFILE}" PACKAGES="${packages}"
 
-          # All profile images + metadata for release
+          # Only sysupgrade image for release assets
+          fw="$(find "bin/targets/${TARGET}/${SUBTARGET}" -maxdepth 1 -type f \
+            -name "*${PROFILE}*squashfs-sysupgrade*" | head -n1)"
+          test -n "${fw}" && test -f "${fw}"
           mkdir -p "${GITHUB_WORKSPACE}/release"
-          find "bin/targets/${TARGET}/${SUBTARGET}" -maxdepth 1 -type f \
-            \( -name "*${PROFILE}*" \
-               -o -name 'sha256sums' \
-               -o -name 'profiles.json' \) \
-            -exec cp -a {} "${GITHUB_WORKSPACE}/release/" \;
+          cp -a "${fw}" "${GITHUB_WORKSPACE}/release/"
+          echo "FIRMWARE_FILE=$(basename "${fw}")" >> "$GITHUB_ENV"
           ls -lah "${GITHUB_WORKSPACE}/release"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-${{ env.VERSION }}-${{ env.PROFILE }}
-          path: release/*
+          name: ${{ env.FIRMWARE_FILE }}
+          path: release/${{ env.FIRMWARE_FILE }}
           if-no-files-found: error
           retention-days: 30
 
@@ -115,7 +115,7 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}-ubootmod-${{ github.run_number }}
           name: ImmortalWrt ${{ env.VERSION }} · AX6000 ubootmod (#${{ github.run_number }})
-          files: release/*
+          files: release/${{ env.FIRMWARE_FILE }}
           fail_on_unmatched_files: true
           body: |
             | Item | Value |
