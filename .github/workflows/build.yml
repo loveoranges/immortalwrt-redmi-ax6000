@@ -16,13 +16,12 @@ concurrency:
 
 env:
   VERSION: "25.12.1"
-  TARGET: mediatek
-  SUBTARGET: filogic
   PROFILE: xiaomi_redmi-router-ax6000-ubootmod
   FIRMWARE: immortalwrt-25.12.1-mediatek-filogic-xiaomi_redmi-router-ax6000-ubootmod-squashfs-sysupgrade.itb
-  # AX6000 / filogic package arch
   PKG_ARCH: aarch64_cortex-a53
-  # third-party: GuNanOvO tailscale apk + XGHeaven/homebox binary (FILES)
+  # Official ImageBuilder image (IB already inside WORKDIR)
+  # https://hub.docker.com/r/immortalwrt/imagebuilder
+  IB_IMAGE: immortalwrt/imagebuilder:mediatek-filogic-openwrt-25.12.1
   EXTRA_PACKAGES: >-
     luci-app-passwall luci-i18n-passwall-zh-cn sing-box
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
@@ -32,6 +31,7 @@ env:
     luci-app-upnp luci-i18n-upnp-zh-cn
     htop
     luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn
+    iperf3
 
 jobs:
   build:
@@ -40,139 +40,42 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential clang flex g++ gawk gettext git \
-            libncurses5-dev libssl-dev python3-setuptools \
-            rsync unzip zlib1g-dev zstd file wget ca-certificates
-
-      - name: Resolve ImageBuilder paths
-        id: ib
-        run: |
-          name="immortalwrt-imagebuilder-${VERSION}-${TARGET}-${SUBTARGET}.Linux-x86_64"
-          base="https://downloads.immortalwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}"
-          echo "name=${name}" >> "$GITHUB_OUTPUT"
-          echo "archive=${name}.tar.zst" >> "$GITHUB_OUTPUT"
-          echo "base=${base}" >> "$GITHUB_OUTPUT"
-          echo "url=${base}/${name}.tar.zst" >> "$GITHUB_OUTPUT"
-          echo "dir=${name}" >> "$GITHUB_OUTPUT"
-          echo "out=${name}/bin/targets/${TARGET}/${SUBTARGET}" >> "$GITHUB_OUTPUT"
-
-      - name: Cache ImageBuilder archive
-        id: cache-ib
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.ib.outputs.archive }}
-          key: ib-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
-
-      - name: Download ImageBuilder
-        if: steps.cache-ib.outputs.cache-hit != 'true'
+      - name: Prepare custom packages
         run: |
           set -euo pipefail
-          wget -q --show-progress -O "${{ steps.ib.outputs.archive }}" "${{ steps.ib.outputs.url }}"
-
-      - name: Verify and extract ImageBuilder
-        run: |
-          set -euo pipefail
-          archive="${{ steps.ib.outputs.archive }}"
-          name="${{ steps.ib.outputs.name }}"
-          base="${{ steps.ib.outputs.base }}"
-          wget -q -O sha256sums "${base}/sha256sums"
-          grep "${archive}" sha256sums | sha256sum -c -
-          tar --zstd -xf "${archive}"
-          # Keep archive on disk so actions/cache can save it after a miss
-
-      - name: Add GuNanOvO openwrt-tailscale
-        working-directory: ${{ steps.ib.outputs.dir }}
-        run: |
-          set -euo pipefail
+          mkdir -p packages out
+          # GuNanOvO smaller tailscale — always latest release
           # https://github.com/GuNanOvO/openwrt-tailscale
-          # Feed ships apk-style names (tailscale-VER-r1.apk) for ImageBuilder.
-          ver="$(python3 <<'PY'
-          import json, urllib.request
-          req = urllib.request.Request(
-              "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest",
-              headers={"User-Agent": "immortalwrt-redmi-ax6000-ci"},
-          )
-          tag = json.load(urllib.request.urlopen(req))["tag_name"]
-          print(tag.lstrip("v"))
-          PY
-          )"
-          dest="packages/tailscale-${ver}-r1.apk"
-          url="https://gunanovo.github.io/openwrt-tailscale/${PKG_ARCH}/tailscale-${ver}-r1.apk"
-          mkdir -p packages
-          wget -q --show-progress -O "${dest}" "${url}"
-          ls -lah "${dest}"
-          echo "Using GuNanOvO tailscale ${ver} -> ${dest}"
+          ver="$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            https://github.com/GuNanOvO/openwrt-tailscale/releases/latest)")"
+          ver="${ver#v}"
+          wget -q --show-progress \
+            -O "packages/tailscale-${ver}-r1.apk" \
+            "https://gunanovo.github.io/openwrt-tailscale/${PKG_ARCH}/tailscale-${ver}-r1.apk"
+          ls -lah packages/
+          # ImageBuilder runs as uid 1000 (build); allow write to bind mounts
+          sudo chown -R 1000:1000 packages out
 
-      - name: Add XGHeaven homebox
-        working-directory: ${{ steps.ib.outputs.dir }}
-        run: |
-          set -euo pipefail
-          # https://github.com/XGHeaven/homebox — OpenWrt needs musl arm64 binary
-          tag="$(python3 <<'PY'
-          import json, urllib.request
-          req = urllib.request.Request(
-              "https://api.github.com/repos/XGHeaven/homebox/releases/latest",
-              headers={"User-Agent": "immortalwrt-redmi-ax6000-ci"},
-          )
-          print(json.load(urllib.request.urlopen(req))["tag_name"])
-          PY
-          )"
-          asset="homebox-linux-arm64-musl.tar.gz"
-          url="https://github.com/XGHeaven/homebox/releases/download/${tag}/${asset}"
-          wget -q --show-progress -O "${asset}" "${url}"
-          tar -xzf "${asset}"
-          rm -f "${asset}"
-
-          mkdir -p files/usr/bin files/etc/init.d files/etc/rc.d
-          install -m 0755 homebox-linux-arm64-musl files/usr/bin/homebox
-          rm -f homebox-linux-arm64-musl
-
-          # procd service on 0.0.0.0:3300, enabled at boot
-          printf '%s\n' \
-            '#!/bin/sh /etc/rc.common' \
-            'START=99' \
-            'USE_PROCD=1' \
-            'PROG=/usr/bin/homebox' \
-            '' \
-            'start_service() {' \
-            '	procd_open_instance' \
-            '	procd_set_param command "$PROG" serve --host 0.0.0.0 --port 3300' \
-            '	procd_set_param respawn' \
-            '	procd_set_param stdout 1' \
-            '	procd_set_param stderr 1' \
-            '	procd_close_instance' \
-            '}' \
-            > files/etc/init.d/homebox
-          chmod 0755 files/etc/init.d/homebox
-          ln -sf ../init.d/homebox files/etc/rc.d/S99homebox
-
-          echo "homebox ${tag} -> files/usr/bin/homebox (port 3300)"
-          ls -lah files/usr/bin/homebox files/etc/init.d/homebox
-
-      - name: Build image
-        working-directory: ${{ steps.ib.outputs.dir }}
+      - name: Build firmware
         run: |
           set -euo pipefail
           packages="$(echo "${EXTRA_PACKAGES}" | xargs)"
           echo "PROFILE=${PROFILE}"
           echo "PACKAGES=${packages}"
-          make image \
-            PROFILE="${PROFILE}" \
-            PACKAGES="${packages}" \
-            FILES="$(pwd)/files"
-          find bin -type f | sort
+          docker run --rm \
+            -v "${{ github.workspace }}/packages:/home/build/immortalwrt/packages" \
+            -v "${{ github.workspace }}/out:/home/build/immortalwrt/bin" \
+            "${IB_IMAGE}" \
+            make image PROFILE="${PROFILE}" PACKAGES="${packages}"
+          find out -type f | sort
 
       - name: Prepare release
         id: release
         run: |
           set -euo pipefail
           tag="${VERSION}-ubootmod-${{ github.run_number }}"
-          src="${{ steps.ib.outputs.out }}/${FIRMWARE}"
-          test -f "${src}"
+          src="$(find out -type f -name "${FIRMWARE}" | head -n1)"
+          test -n "${src}" && test -f "${src}"
           mkdir -p release
           cp -a "${src}" "release/${FIRMWARE}"
           ls -lah "release/${FIRMWARE}"
@@ -201,7 +104,7 @@ jobs:
             | --- | --- |
             | ImmortalWrt | `${{ env.VERSION }}` |
             | Profile | `${{ env.PROFILE }}` |
-            | Target | `${{ env.TARGET }}/${{ env.SUBTARGET }}` |
+            | Image | `${{ env.IB_IMAGE }}` |
             | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
 
             ### Packages
@@ -209,27 +112,3 @@ jobs:
             ```
             ${{ env.EXTRA_PACKAGES }}
             ```
-
-            > 仅适用于 **ubootmod** 布局。
-            >
-            > - `tailscale`：[GuNanOvO/openwrt-tailscale](https://github.com/GuNanOvO/openwrt-tailscale) + `luci-app-tailscale-community`
-            > - `homebox`：[XGHeaven/homebox](https://github.com/XGHeaven/homebox)（`:3300`，开机自启）
-
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo "## Build"
-            echo "| | |"
-            echo "| --- | --- |"
-            echo "| Version | \`${VERSION}\` |"
-            echo "| Profile | \`${PROFILE}\` |"
-            echo "| Target | \`${TARGET}/${SUBTARGET}\` |"
-            echo "| ImageBuilder | ${{ steps.ib.outputs.url }} |"
-            echo "| Release tag | \`${{ steps.release.outputs.tag }}\` |"
-            echo ""
-            echo "### Packages"
-            echo '```'
-            echo "${EXTRA_PACKAGES}" | xargs -n1
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
