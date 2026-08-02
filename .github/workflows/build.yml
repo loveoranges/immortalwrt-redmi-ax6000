@@ -69,7 +69,7 @@ jobs:
 
       - name: Cache ImageBuilder
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.IB_ARCHIVE }}
           key: ib-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
@@ -112,7 +112,7 @@ jobs:
           ls -lah "${GITHUB_WORKSPACE}/release"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.FIRMWARE_FILE }}
           path: release/${{ env.FIRMWARE_FILE }}
@@ -120,7 +120,7 @@ jobs:
           retention-days: 30
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.VERSION }}-ubootmod-${{ github.run_number }}
           name: ImmortalWrt ${{ env.VERSION }} · AX6000 ubootmod (#${{ github.run_number }})
