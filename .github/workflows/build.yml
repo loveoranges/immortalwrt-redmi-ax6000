@@ -34,7 +34,7 @@ env:
     luci-app-wol luci-i18n-wol-zh-cn
     luci-app-watchcat luci-i18n-watchcat-zh-cn
     luci-app-sqm luci-i18n-sqm-zh-cn sqm-scripts
-    kmod-tcp-bbr
+    kmod-tcp-bbr kmod-sched-core
     luci-i18n-base-zh-cn
     tcpdump mtr-json bind-dig ethtool
     v2ray-geoip v2ray-geosite
@@ -100,7 +100,14 @@ jobs:
           ver="$(basename "$url" | cut -d_ -f2)"
           curl -fsSL -o "packages/tailscale-${ver}-r1.apk" "$url"
 
-          make image PROFILE="${PROFILE}" PACKAGES="${EXTRA_PACKAGES}"
+          # default BBR + fq
+          mkdir -p files/etc/sysctl.d
+          printf '%s\n' \
+            'net.core.default_qdisc=fq' \
+            'net.ipv4.tcp_congestion_control=bbr' \
+            > files/etc/sysctl.d/12-bbr-fq.conf
+
+          make image PROFILE="${PROFILE}" PACKAGES="${EXTRA_PACKAGES}" FILES="files"
 
           fw="$(find "bin/targets/${TARGET}/${SUBTARGET}" -maxdepth 1 -type f \
             -name "*${PROFILE}*squashfs-sysupgrade*" | head -n1)"
