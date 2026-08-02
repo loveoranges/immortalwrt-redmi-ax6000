@@ -19,7 +19,6 @@ env:
   TARGET: mediatek
   SUBTARGET: filogic
   PROFILE: xiaomi_redmi-router-ax6000-ubootmod
-  PKG_ARCH: aarch64_cortex-a53
   EXTRA_PACKAGES: >-
     luci-app-passwall luci-i18n-passwall-zh-cn sing-box
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
@@ -28,7 +27,7 @@ env:
     luci-app-nut luci-i18n-nut-zh-cn
     luci-app-upnp luci-i18n-upnp-zh-cn
     htop
-    luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn
+    tailscale luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn
     iperf3
     luci-app-statistics luci-i18n-statistics-zh-cn
     collectd collectd-mod-cpu collectd-mod-interface
@@ -93,17 +92,6 @@ jobs:
         working-directory: ${{ env.IB_DIR }}
         run: |
           set -euo pipefail
-
-          # GuNanOvO/openwrt-tailscale latest → packages/ (apk name must be name-ver-rN.apk)
-          mkdir -p packages
-          url="$(curl -fsSL \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest" \
-            | jq -r --arg a "$PKG_ARCH" \
-              '.assets[]|select(.name|endswith("_"+$a+".apk") and startswith("tailscale_"))|.browser_download_url')"
-          ver="$(basename "$url" | cut -d_ -f2)"
-          curl -fsSL -o "packages/tailscale-${ver}-r1.apk" "$url"
 
           make image PROFILE="${PROFILE}" PACKAGES="${EXTRA_PACKAGES}" \
             FILES="${GITHUB_WORKSPACE}/files"
