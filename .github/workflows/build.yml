@@ -89,28 +89,26 @@ jobs:
         working-directory: ${{ steps.ib.outputs.dir }}
         run: |
           set -euo pipefail
-          # Latest prebuilt apk: https://github.com/GuNanOvO/openwrt-tailscale
-          url="$(python3 <<'PY'
-          import json, os, urllib.request
-          arch = os.environ["PKG_ARCH"]
+          # https://github.com/GuNanOvO/openwrt-tailscale
+          # GitHub Release assets use opkg-style names (tailscale_VER_ARCH.apk).
+          # ImageBuilder/apk requires Alpine-style names (tailscale-VER-r1.apk).
+          # The project feed already ships correctly named apks — use that.
+          ver="$(python3 <<'PY'
+          import json, urllib.request
           req = urllib.request.Request(
               "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest",
               headers={"User-Agent": "immortalwrt-redmi-ax6000-ci"},
           )
-          data = json.load(urllib.request.urlopen(req))
-          for asset in data["assets"]:
-              name = asset["name"]
-              if name.startswith("tailscale_") and name.endswith(f"_{arch}.apk"):
-                  print(asset["browser_download_url"])
-                  raise SystemExit(0)
-          raise SystemExit(f"no tailscale apk for {arch}")
+          tag = json.load(urllib.request.urlopen(req))["tag_name"]
+          print(tag.lstrip("v"))
           PY
           )"
+          dest="packages/tailscale-${ver}-r1.apk"
+          url="https://gunanovo.github.io/openwrt-tailscale/${PKG_ARCH}/tailscale-${ver}-r1.apk"
           mkdir -p packages
-          fname="$(basename "${url}")"
-          wget -q --show-progress -O "packages/${fname}" "${url}"
-          ls -lah "packages/${fname}"
-          echo "Using GuNanOvO package: ${fname}"
+          wget -q --show-progress -O "${dest}" "${url}"
+          ls -lah "${dest}"
+          echo "Using GuNanOvO tailscale ${ver} -> ${dest}"
 
       - name: Build image
         working-directory: ${{ steps.ib.outputs.dir }}
