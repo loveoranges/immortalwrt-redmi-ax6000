@@ -20,6 +20,9 @@ env:
   SUBTARGET: filogic
   PROFILE: xiaomi_redmi-router-ax6000-ubootmod
   FIRMWARE: immortalwrt-25.12.1-mediatek-filogic-xiaomi_redmi-router-ax6000-ubootmod-squashfs-sysupgrade.itb
+  # AX6000 / filogic package arch
+  PKG_ARCH: aarch64_cortex-a53
+  # tailscale binary: GuNanOvO/openwrt-tailscale (packages/); UI: luci-app-tailscale-community
   EXTRA_PACKAGES: >-
     luci-app-passwall luci-i18n-passwall-zh-cn sing-box
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
@@ -28,7 +31,8 @@ env:
     luci-app-nut luci-i18n-nut-zh-cn
     luci-app-upnp luci-i18n-upnp-zh-cn
     htop
-    luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn tailscale
+    luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn
+    tailscale
 
 jobs:
   build:
@@ -45,24 +49,68 @@ jobs:
             libncurses5-dev libssl-dev python3-setuptools \
             rsync unzip zlib1g-dev zstd file wget ca-certificates
 
-      - name: Download ImageBuilder
+      - name: Resolve ImageBuilder paths
         id: ib
         run: |
-          set -euo pipefail
           name="immortalwrt-imagebuilder-${VERSION}-${TARGET}-${SUBTARGET}.Linux-x86_64"
           base="https://downloads.immortalwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}"
-          url="${base}/${name}.tar.zst"
-
-          wget -q --show-progress -O "${name}.tar.zst" "${url}"
-          wget -q -O sha256sums "${base}/sha256sums"
-          grep "${name}.tar.zst" sha256sums | sha256sum -c -
-
-          tar --zstd -xf "${name}.tar.zst"
-          rm -f "${name}.tar.zst"
-
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "archive=${name}.tar.zst" >> "$GITHUB_OUTPUT"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "url=${base}/${name}.tar.zst" >> "$GITHUB_OUTPUT"
           echo "dir=${name}" >> "$GITHUB_OUTPUT"
-          echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "out=${name}/bin/targets/${TARGET}/${SUBTARGET}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ImageBuilder archive
+        id: cache-ib
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.ib.outputs.archive }}
+          key: ib-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
+
+      - name: Download ImageBuilder
+        if: steps.cache-ib.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          wget -q --show-progress -O "${{ steps.ib.outputs.archive }}" "${{ steps.ib.outputs.url }}"
+
+      - name: Verify and extract ImageBuilder
+        run: |
+          set -euo pipefail
+          archive="${{ steps.ib.outputs.archive }}"
+          name="${{ steps.ib.outputs.name }}"
+          base="${{ steps.ib.outputs.base }}"
+          wget -q -O sha256sums "${base}/sha256sums"
+          grep "${archive}" sha256sums | sha256sum -c -
+          tar --zstd -xf "${archive}"
+          # Keep archive on disk so actions/cache can save it after a miss
+
+      - name: Add GuNanOvO openwrt-tailscale
+        working-directory: ${{ steps.ib.outputs.dir }}
+        run: |
+          set -euo pipefail
+          # Latest prebuilt apk: https://github.com/GuNanOvO/openwrt-tailscale
+          url="$(python3 <<'PY'
+          import json, os, urllib.request
+          arch = os.environ["PKG_ARCH"]
+          req = urllib.request.Request(
+              "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest",
+              headers={"User-Agent": "immortalwrt-redmi-ax6000-ci"},
+          )
+          data = json.load(urllib.request.urlopen(req))
+          for asset in data["assets"]:
+              name = asset["name"]
+              if name.startswith("tailscale_") and name.endswith(f"_{arch}.apk"):
+                  print(asset["browser_download_url"])
+                  raise SystemExit(0)
+          raise SystemExit(f"no tailscale apk for {arch}")
+          PY
+          )"
+          mkdir -p packages
+          fname="$(basename "${url}")"
+          wget -q --show-progress -O "packages/${fname}" "${url}"
+          ls -lah "packages/${fname}"
+          echo "Using GuNanOvO package: ${fname}"
 
       - name: Build image
         working-directory: ${{ steps.ib.outputs.dir }}
@@ -71,6 +119,7 @@ jobs:
           packages="$(echo "${EXTRA_PACKAGES}" | xargs)"
           echo "PROFILE=${PROFILE}"
           echo "PACKAGES=${packages}"
+          # Prefer local packages/ (GuNanOvO tailscale) over official feed
           make image PROFILE="${PROFILE}" PACKAGES="${packages}"
           find bin -type f | sort
 
@@ -119,6 +168,8 @@ jobs:
             ```
 
             > 仅适用于 **ubootmod** 布局。
+            >
+            > `tailscale` 二进制来自 [GuNanOvO/openwrt-tailscale](https://github.com/GuNanOvO/openwrt-tailscale)；LuCI 使用 `luci-app-tailscale-community`。
 
       - name: Summary
         if: always()
