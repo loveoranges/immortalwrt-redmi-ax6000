@@ -56,7 +56,6 @@ jobs:
             echo "IB_BASE=${BASE}"
             echo "IB_URL=${BASE}/${IB}.tar.zst"
             echo "BIN_DIR=${IB}/bin/targets/${TARGET}/${SUBTARGET}"
-            echo "FIRMWARE=immortalwrt-${V}-${TARGET}-${SUBTARGET}-${PROFILE}-squashfs-sysupgrade.itb"
           } >> "$GITHUB_ENV"
 
       - name: Cache ImageBuilder
@@ -80,6 +79,8 @@ jobs:
         working-directory: ${{ env.IB_DIR }}
         run: |
           set -euo pipefail
+          packages="$(echo ${EXTRA_PACKAGES})"
+
           # GuNanOvO/openwrt-tailscale latest → packages/ (rename for apk/IB)
           mkdir -p packages
           url="$(curl -fsSL \
@@ -89,13 +90,23 @@ jobs:
             | jq -r --arg a "$PKG_ARCH" \
               '.assets[]|select(.name|endswith("_"+$a+".apk") and startswith("tailscale_"))|.browser_download_url')"
           wget -q -O "packages/tailscale-$(basename "$url" | cut -d_ -f2)-r1.apk" "$url"
-          make image PROFILE="${PROFILE}" PACKAGES="$(echo ${EXTRA_PACKAGES})"
 
-      - name: Upload artifact
+          make image PROFILE="${PROFILE}" PACKAGES="${packages}"
+
+          # All profile images + metadata for release
+          mkdir -p "${GITHUB_WORKSPACE}/release"
+          find "bin/targets/${TARGET}/${SUBTARGET}" -maxdepth 1 -type f \
+            \( -name "*${PROFILE}*" \
+               -o -name 'sha256sums' \
+               -o -name 'profiles.json' \) \
+            -exec cp -a {} "${GITHUB_WORKSPACE}/release/" \;
+          ls -lah "${GITHUB_WORKSPACE}/release"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.FIRMWARE }}
-          path: ${{ env.BIN_DIR }}/${{ env.FIRMWARE }}
+          name: immortalwrt-${{ env.VERSION }}-${{ env.PROFILE }}
+          path: release/*
           if-no-files-found: error
           retention-days: 30
 
@@ -104,7 +115,7 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}-ubootmod-${{ github.run_number }}
           name: ImmortalWrt ${{ env.VERSION }} · AX6000 ubootmod (#${{ github.run_number }})
-          files: ${{ env.BIN_DIR }}/${{ env.FIRMWARE }}
+          files: release/*
           fail_on_unmatched_files: true
           body: |
             | Item | Value |
