@@ -49,8 +49,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang flex g++ gawk gettext \
-            libncurses5-dev libssl-dev rsync unzip zlib1g-dev zstd file
+            build-essential gawk gettext libncurses5-dev \
+            libssl-dev rsync unzip zlib1g-dev zstd file
 
       - name: Resolve version
         run: |
@@ -64,7 +64,6 @@ jobs:
             echo "IB_ARCHIVE=${IB}.tar.zst"
             echo "IB_BASE=${BASE}"
             echo "IB_URL=${BASE}/${IB}.tar.zst"
-            echo "BIN_DIR=${IB}/bin/targets/${TARGET}/${SUBTARGET}"
           } >> "$GITHUB_ENV"
 
       - name: Cache ImageBuilder
@@ -78,9 +77,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ steps.cache.outputs.cache-hit }}" != "true" ]]; then
-            wget -q -O "${IB_ARCHIVE}" "${IB_URL}"
+            curl -fsSL --retry 3 -o "${IB_ARCHIVE}" "${IB_URL}"
           fi
-          wget -q -O sha256sums "${IB_BASE}/sha256sums"
+          curl -fsSL -o sha256sums "${IB_BASE}/sha256sums"
           grep "${IB_ARCHIVE}" sha256sums | sha256sum -c -
           tar --zstd -xf "${IB_ARCHIVE}"
 
@@ -88,9 +87,8 @@ jobs:
         working-directory: ${{ env.IB_DIR }}
         run: |
           set -euo pipefail
-          packages="$(echo ${EXTRA_PACKAGES})"
 
-          # GuNanOvO/openwrt-tailscale latest → packages/ (rename for apk/IB)
+          # GuNanOvO/openwrt-tailscale latest → packages/
           mkdir -p packages
           url="$(curl -fsSL \
             -H "Authorization: Bearer ${{ github.token }}" \
@@ -98,18 +96,16 @@ jobs:
             "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest" \
             | jq -r --arg a "$PKG_ARCH" \
               '.assets[]|select(.name|endswith("_"+$a+".apk") and startswith("tailscale_"))|.browser_download_url')"
-          wget -q -O "packages/tailscale-$(basename "$url" | cut -d_ -f2)-r1.apk" "$url"
+          curl -fsSL -o "packages/$(basename "$url")" "$url"
 
-          make image PROFILE="${PROFILE}" PACKAGES="${packages}"
+          make image PROFILE="${PROFILE}" PACKAGES="${EXTRA_PACKAGES}"
 
-          # Only sysupgrade image for release assets
           fw="$(find "bin/targets/${TARGET}/${SUBTARGET}" -maxdepth 1 -type f \
             -name "*${PROFILE}*squashfs-sysupgrade*" | head -n1)"
-          test -n "${fw}" && test -f "${fw}"
+          test -f "${fw}"
           mkdir -p "${GITHUB_WORKSPACE}/release"
           cp -a "${fw}" "${GITHUB_WORKSPACE}/release/"
           echo "FIRMWARE_FILE=$(basename "${fw}")" >> "$GITHUB_ENV"
-          ls -lah "${GITHUB_WORKSPACE}/release"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
