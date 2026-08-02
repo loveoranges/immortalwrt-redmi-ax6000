@@ -22,7 +22,7 @@ env:
   FIRMWARE: immortalwrt-25.12.1-mediatek-filogic-xiaomi_redmi-router-ax6000-ubootmod-squashfs-sysupgrade.itb
   # AX6000 / filogic package arch
   PKG_ARCH: aarch64_cortex-a53
-  # tailscale binary: GuNanOvO/openwrt-tailscale (packages/); UI: luci-app-tailscale-community
+  # third-party: GuNanOvO tailscale apk + XGHeaven/homebox binary (FILES)
   EXTRA_PACKAGES: >-
     luci-app-passwall luci-i18n-passwall-zh-cn sing-box
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
@@ -32,7 +32,6 @@ env:
     luci-app-upnp luci-i18n-upnp-zh-cn
     htop
     luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn
-    tailscale
 
 jobs:
   build:
@@ -90,9 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           # https://github.com/GuNanOvO/openwrt-tailscale
-          # GitHub Release assets use opkg-style names (tailscale_VER_ARCH.apk).
-          # ImageBuilder/apk requires Alpine-style names (tailscale-VER-r1.apk).
-          # The project feed already ships correctly named apks — use that.
+          # Feed ships apk-style names (tailscale-VER-r1.apk) for ImageBuilder.
           ver="$(python3 <<'PY'
           import json, urllib.request
           req = urllib.request.Request(
@@ -110,6 +107,52 @@ jobs:
           ls -lah "${dest}"
           echo "Using GuNanOvO tailscale ${ver} -> ${dest}"
 
+      - name: Add XGHeaven homebox
+        working-directory: ${{ steps.ib.outputs.dir }}
+        run: |
+          set -euo pipefail
+          # https://github.com/XGHeaven/homebox — OpenWrt needs musl arm64 binary
+          tag="$(python3 <<'PY'
+          import json, urllib.request
+          req = urllib.request.Request(
+              "https://api.github.com/repos/XGHeaven/homebox/releases/latest",
+              headers={"User-Agent": "immortalwrt-redmi-ax6000-ci"},
+          )
+          print(json.load(urllib.request.urlopen(req))["tag_name"])
+          PY
+          )"
+          asset="homebox-linux-arm64-musl.tar.gz"
+          url="https://github.com/XGHeaven/homebox/releases/download/${tag}/${asset}"
+          wget -q --show-progress -O "${asset}" "${url}"
+          tar -xzf "${asset}"
+          rm -f "${asset}"
+
+          mkdir -p files/usr/bin files/etc/init.d files/etc/rc.d
+          install -m 0755 homebox-linux-arm64-musl files/usr/bin/homebox
+          rm -f homebox-linux-arm64-musl
+
+          # procd service on 0.0.0.0:3300, enabled at boot
+          printf '%s\n' \
+            '#!/bin/sh /etc/rc.common' \
+            'START=99' \
+            'USE_PROCD=1' \
+            'PROG=/usr/bin/homebox' \
+            '' \
+            'start_service() {' \
+            '	procd_open_instance' \
+            '	procd_set_param command "$PROG" serve --host 0.0.0.0 --port 3300' \
+            '	procd_set_param respawn' \
+            '	procd_set_param stdout 1' \
+            '	procd_set_param stderr 1' \
+            '	procd_close_instance' \
+            '}' \
+            > files/etc/init.d/homebox
+          chmod 0755 files/etc/init.d/homebox
+          ln -sf ../init.d/homebox files/etc/rc.d/S99homebox
+
+          echo "homebox ${tag} -> files/usr/bin/homebox (port 3300)"
+          ls -lah files/usr/bin/homebox files/etc/init.d/homebox
+
       - name: Build image
         working-directory: ${{ steps.ib.outputs.dir }}
         run: |
@@ -117,8 +160,10 @@ jobs:
           packages="$(echo "${EXTRA_PACKAGES}" | xargs)"
           echo "PROFILE=${PROFILE}"
           echo "PACKAGES=${packages}"
-          # Prefer local packages/ (GuNanOvO tailscale) over official feed
-          make image PROFILE="${PROFILE}" PACKAGES="${packages}"
+          make image \
+            PROFILE="${PROFILE}" \
+            PACKAGES="${packages}" \
+            FILES="$(pwd)/files"
           find bin -type f | sort
 
       - name: Prepare release
@@ -167,7 +212,8 @@ jobs:
 
             > 仅适用于 **ubootmod** 布局。
             >
-            > `tailscale` 二进制来自 [GuNanOvO/openwrt-tailscale](https://github.com/GuNanOvO/openwrt-tailscale)；LuCI 使用 `luci-app-tailscale-community`。
+            > - `tailscale`：[GuNanOvO/openwrt-tailscale](https://github.com/GuNanOvO/openwrt-tailscale) + `luci-app-tailscale-community`
+            > - `homebox`：[XGHeaven/homebox](https://github.com/XGHeaven/homebox)（`:3300`，开机自启）
 
       - name: Summary
         if: always()
