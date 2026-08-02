@@ -1,0 +1,106 @@
+name: Build Redmi AX6000 Firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERSION: "25.12.1"
+  TARGET: mediatek
+  SUBTARGET: filogic
+  PROFILE: xiaomi_redmi-router-ax6000-ubootmod
+  EXTRA_PACKAGES: >-
+    luci-app-passwall luci-i18n-passwall-zh-cn sing-box
+    luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
+    luci-app-ddns luci-i18n-ddns-zh-cn
+    luci-app-vlmcsd luci-i18n-vlmcsd-zh-cn
+    luci-app-nut luci-i18n-nut-zh-cn
+    luci-app-upnp luci-i18n-upnp-zh-cn
+    htop
+    luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn tailscale
+
+jobs:
+  build:
+    name: ImageBuilder
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -af || true
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex g++ gawk gettext git \
+            libncurses5-dev libssl-dev python3-setuptools \
+            rsync unzip zlib1g-dev zstd file wget ca-certificates
+
+      - name: Download ImageBuilder
+        id: ib
+        run: |
+          set -euo pipefail
+          name="immortalwrt-imagebuilder-${VERSION}-${TARGET}-${SUBTARGET}.Linux-x86_64"
+          base="https://downloads.immortalwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}"
+          url="${base}/${name}.tar.zst"
+
+          wget -q --show-progress -O "${name}.tar.zst" "${url}"
+          wget -q -O sha256sums "${base}/sha256sums"
+          grep "${name}.tar.zst" sha256sums | sha256sum -c -
+
+          tar --zstd -xf "${name}.tar.zst"
+          rm -f "${name}.tar.zst"
+
+          echo "dir=${name}" >> "$GITHUB_OUTPUT"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        working-directory: ${{ steps.ib.outputs.dir }}
+        run: |
+          set -euo pipefail
+          packages="$(echo "${EXTRA_PACKAGES}" | xargs)"
+          echo "PROFILE=${PROFILE}"
+          echo "PACKAGES=${packages}"
+          make image PROFILE="${PROFILE}" PACKAGES="${packages}"
+          find bin -type f | sort
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-${{ env.VERSION }}-${{ env.PROFILE }}
+          path: ${{ steps.ib.outputs.dir }}/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Build"
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Version | \`${VERSION}\` |"
+            echo "| Profile | \`${PROFILE}\` |"
+            echo "| Target | \`${TARGET}/${SUBTARGET}\` |"
+            echo "| ImageBuilder | ${{ steps.ib.outputs.url }} |"
+            echo ""
+            echo "### Packages"
+            echo '```'
+            echo "${EXTRA_PACKAGES}" | xargs -n1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
