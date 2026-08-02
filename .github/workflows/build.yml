@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/build.yml"
+    paths: [".github/workflows/build.yml"]
 
 permissions:
   contents: write
@@ -15,13 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  VERSION: "25.12.1"
+  TARGET: mediatek
+  SUBTARGET: filogic
   PROFILE: xiaomi_redmi-router-ax6000-ubootmod
-  FIRMWARE: immortalwrt-25.12.1-mediatek-filogic-xiaomi_redmi-router-ax6000-ubootmod-squashfs-sysupgrade.itb
   PKG_ARCH: aarch64_cortex-a53
-  # Official ImageBuilder image (IB already inside WORKDIR)
-  # https://hub.docker.com/r/immortalwrt/imagebuilder
-  IB_IMAGE: immortalwrt/imagebuilder:mediatek-filogic-openwrt-25.12.1
   EXTRA_PACKAGES: >-
     luci-app-passwall luci-i18n-passwall-zh-cn sing-box
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
@@ -40,75 +36,79 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Prepare custom packages
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex g++ gawk gettext \
+            libncurses5-dev libssl-dev rsync unzip zlib1g-dev zstd file
+
+      - name: Resolve version
         run: |
           set -euo pipefail
-          mkdir -p packages out
-          # GuNanOvO smaller tailscale — always latest release
-          # https://github.com/GuNanOvO/openwrt-tailscale
-          ver="$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-            https://github.com/GuNanOvO/openwrt-tailscale/releases/latest)")"
-          ver="${ver#v}"
-          wget -q --show-progress \
-            -O "packages/tailscale-${ver}-r1.apk" \
-            "https://gunanovo.github.io/openwrt-tailscale/${PKG_ARCH}/tailscale-${ver}-r1.apk"
-          ls -lah packages/
-          # ImageBuilder runs as uid 1000 (build); allow write to bind mounts
-          sudo chown -R 1000:1000 packages out
+          V="$(curl -fsSL https://downloads.immortalwrt.org/.versions.json | jq -r .stable_version)"
+          IB="immortalwrt-imagebuilder-${V}-${TARGET}-${SUBTARGET}.Linux-x86_64"
+          BASE="https://downloads.immortalwrt.org/releases/${V}/targets/${TARGET}/${SUBTARGET}"
+          {
+            echo "VERSION=${V}"
+            echo "IB_DIR=${IB}"
+            echo "IB_ARCHIVE=${IB}.tar.zst"
+            echo "IB_BASE=${BASE}"
+            echo "IB_URL=${BASE}/${IB}.tar.zst"
+            echo "BIN_DIR=${IB}/bin/targets/${TARGET}/${SUBTARGET}"
+            echo "FIRMWARE=immortalwrt-${V}-${TARGET}-${SUBTARGET}-${PROFILE}-squashfs-sysupgrade.itb"
+          } >> "$GITHUB_ENV"
 
-      - name: Build firmware
+      - name: Cache ImageBuilder
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.IB_ARCHIVE }}
+          key: ib-${{ env.VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
+
+      - name: Setup ImageBuilder
         run: |
           set -euo pipefail
-          packages="$(echo "${EXTRA_PACKAGES}" | xargs)"
-          echo "PROFILE=${PROFILE}"
-          echo "PACKAGES=${packages}"
-          docker run --rm \
-            -v "${{ github.workspace }}/packages:/home/build/immortalwrt/packages" \
-            -v "${{ github.workspace }}/out:/home/build/immortalwrt/bin" \
-            "${IB_IMAGE}" \
-            make image PROFILE="${PROFILE}" PACKAGES="${packages}"
-          find out -type f | sort
+          if [[ "${{ steps.cache.outputs.cache-hit }}" != "true" ]]; then
+            wget -q -O "${IB_ARCHIVE}" "${IB_URL}"
+          fi
+          wget -q -O sha256sums "${IB_BASE}/sha256sums"
+          grep "${IB_ARCHIVE}" sha256sums | sha256sum -c -
+          tar --zstd -xf "${IB_ARCHIVE}"
 
-      - name: Prepare release
-        id: release
+      - name: Build
+        working-directory: ${{ env.IB_DIR }}
         run: |
           set -euo pipefail
-          tag="${VERSION}-ubootmod-${{ github.run_number }}"
-          src="$(find out -type f -name "${FIRMWARE}" | head -n1)"
-          test -n "${src}" && test -f "${src}"
-          mkdir -p release
-          cp -a "${src}" "release/${FIRMWARE}"
-          ls -lah "release/${FIRMWARE}"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "file=release/${FIRMWARE}" >> "$GITHUB_OUTPUT"
+          # GuNanOvO/openwrt-tailscale latest → packages/ (rename for apk/IB)
+          mkdir -p packages
+          url="$(curl -fsSL \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/GuNanOvO/openwrt-tailscale/releases/latest" \
+            | jq -r --arg a "$PKG_ARCH" \
+              '.assets[]|select(.name|endswith("_"+$a+".apk") and startswith("tailscale_"))|.browser_download_url')"
+          wget -q -O "packages/tailscale-$(basename "$url" | cut -d_ -f2)-r1.apk" "$url"
+          make image PROFILE="${PROFILE}" PACKAGES="$(echo ${EXTRA_PACKAGES})"
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FIRMWARE }}
-          path: release/${{ env.FIRMWARE }}
+          path: ${{ env.BIN_DIR }}/${{ env.FIRMWARE }}
           if-no-files-found: error
           retention-days: 30
 
-      - name: Create GitHub Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release.outputs.tag }}
+          tag_name: ${{ env.VERSION }}-ubootmod-${{ github.run_number }}
           name: ImmortalWrt ${{ env.VERSION }} · AX6000 ubootmod (#${{ github.run_number }})
-          files: ${{ steps.release.outputs.file }}
+          files: ${{ env.BIN_DIR }}/${{ env.FIRMWARE }}
           fail_on_unmatched_files: true
           body: |
-            ## Redmi AX6000 (ubootmod)
-
             | Item | Value |
             | --- | --- |
             | ImmortalWrt | `${{ env.VERSION }}` |
             | Profile | `${{ env.PROFILE }}` |
-            | Image | `${{ env.IB_IMAGE }}` |
-            | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
-
-            ### Packages
-
-            ```
-            ${{ env.EXTRA_PACKAGES }}
-            ```
+            | Packages | `${{ env.EXTRA_PACKAGES }}` |
