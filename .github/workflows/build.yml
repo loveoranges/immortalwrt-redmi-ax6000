@@ -8,7 +8,7 @@ on:
       - ".github/workflows/build.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -19,6 +19,7 @@ env:
   TARGET: mediatek
   SUBTARGET: filogic
   PROFILE: xiaomi_redmi-router-ax6000-ubootmod
+  FIRMWARE: immortalwrt-25.12.1-mediatek-filogic-xiaomi_redmi-router-ax6000-ubootmod-squashfs-sysupgrade.itb
   EXTRA_PACKAGES: >-
     luci-app-passwall luci-i18n-passwall-zh-cn sing-box
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
@@ -36,13 +37,6 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL || true
-          sudo docker image prune -af || true
-          df -h
-
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -68,6 +62,7 @@ jobs:
 
           echo "dir=${name}" >> "$GITHUB_OUTPUT"
           echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "out=${name}/bin/targets/${TARGET}/${SUBTARGET}" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         working-directory: ${{ steps.ib.outputs.dir }}
@@ -79,13 +74,51 @@ jobs:
           make image PROFILE="${PROFILE}" PACKAGES="${packages}"
           find bin -type f | sort
 
+      - name: Prepare release
+        id: release
+        run: |
+          set -euo pipefail
+          tag="${VERSION}-ubootmod-${{ github.run_number }}"
+          src="${{ steps.ib.outputs.out }}/${FIRMWARE}"
+          test -f "${src}"
+          mkdir -p release
+          cp -a "${src}" "release/${FIRMWARE}"
+          ls -lah "release/${FIRMWARE}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "file=release/${FIRMWARE}" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-${{ env.VERSION }}-${{ env.PROFILE }}
-          path: ${{ steps.ib.outputs.dir }}/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*
+          name: ${{ env.FIRMWARE }}
+          path: release/${{ env.FIRMWARE }}
           if-no-files-found: error
           retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: ImmortalWrt ${{ env.VERSION }} · AX6000 ubootmod (#${{ github.run_number }})
+          files: ${{ steps.release.outputs.file }}
+          fail_on_unmatched_files: true
+          body: |
+            ## Redmi AX6000 (ubootmod)
+
+            | Item | Value |
+            | --- | --- |
+            | ImmortalWrt | `${{ env.VERSION }}` |
+            | Profile | `${{ env.PROFILE }}` |
+            | Target | `${{ env.TARGET }}/${{ env.SUBTARGET }}` |
+            | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+            ### Packages
+
+            ```
+            ${{ env.EXTRA_PACKAGES }}
+            ```
+
+            > 仅适用于 **ubootmod** 布局。
 
       - name: Summary
         if: always()
@@ -98,6 +131,7 @@ jobs:
             echo "| Profile | \`${PROFILE}\` |"
             echo "| Target | \`${TARGET}/${SUBTARGET}\` |"
             echo "| ImageBuilder | ${{ steps.ib.outputs.url }} |"
+            echo "| Release tag | \`${{ steps.release.outputs.tag }}\` |"
             echo ""
             echo "### Packages"
             echo '```'
