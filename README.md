@@ -1,2 +1,1 @@
-# openwrt-linksys_e8450
-e8450 lede固件
+# immortalwrt-redmi-ax6000
