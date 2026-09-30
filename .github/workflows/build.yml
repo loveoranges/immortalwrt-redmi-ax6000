@@ -24,7 +24,6 @@ env:
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
     luci-app-ddns luci-i18n-ddns-zh-cn
     luci-app-vlmcsd luci-i18n-vlmcsd-zh-cn
-    luci-app-nut luci-i18n-nut-zh-cn
     luci-app-upnp luci-i18n-upnp-zh-cn
     htop
     tailscale luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn
@@ -34,7 +33,6 @@ env:
     collectd-mod-iwinfo collectd-mod-load collectd-mod-memory collectd-mod-network
     luci-app-wol luci-i18n-wol-zh-cn
     luci-app-watchcat luci-i18n-watchcat-zh-cn
-    luci-app-sqm luci-i18n-sqm-zh-cn sqm-scripts
     kmod-tcp-bbr kmod-sched-core
     luci-i18n-base-zh-cn
     tcpdump mtr-json bind-dig ethtool
