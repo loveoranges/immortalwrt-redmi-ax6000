@@ -1,0 +1,7 @@
+#!/bin/sh
+# Add GOGC=10 to tailscaled env so it survives sysupgrade.
+f=/etc/init.d/tailscale
+[ -f "$f" ] || exit 0
+grep -q 'GOGC=' "$f" && exit 0
+sed -i 's/^\([[:space:]]*procd_set_param env TS_DEBUG_FIREWALL_MODE="\$fw_mode"\)[[:space:]]*$/\1 GOGC=10/' "$f"
+exit 0
