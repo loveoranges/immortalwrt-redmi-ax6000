@@ -19,8 +19,15 @@ env:
   TARGET: mediatek
   SUBTARGET: filogic
   PROFILE: xiaomi_redmi-router-ax6000-ubootmod
+  # Pin PassWall from upstream Release; ImmortalWrt 25.12 feed may lag.
+  PASSWALL_TAG: 26.10.16-2
   EXTRA_PACKAGES: >-
-    luci-app-passwall luci-i18n-passwall-zh-cn sing-box
+    luci-app-passwall luci-i18n-passwall-zh-cn
+    sing-box
+    chinadns-ng dns2socks microsocks ipt2socks
+    geoview
+    kmod-nft-socket kmod-nft-tproxy kmod-nft-nat
+    kmod-nf-reject kmod-nf-reject6
     luci-app-ttyd luci-i18n-ttyd-zh-cn ttyd
     luci-app-ddns luci-i18n-ddns-zh-cn
     luci-app-vlmcsd luci-i18n-vlmcsd-zh-cn
@@ -86,6 +93,20 @@ jobs:
           grep "${IB_ARCHIVE}" sha256sums | sha256sum -c -
           tar --zstd -xf "${IB_ARCHIVE}"
 
+      - name: Vendor PassWall packages
+        run: |
+          set -euo pipefail
+          PW_BASE="https://github.com/Openwrt-Passwall/openwrt-passwall/releases/download/${PASSWALL_TAG}"
+          mkdir -p "${IB_DIR}/packages"
+          curl -fsSL --retry 3 -o "${IB_DIR}/packages/luci-app-passwall.apk" \
+            "${PW_BASE}/25.12+_luci-app-passwall-26.10.16-r2.apk"
+          curl -fsSL --retry 3 -o "${IB_DIR}/packages/luci-i18n-passwall-zh-cn.apk" \
+            "${PW_BASE}/25.12+_luci-i18n-passwall-zh-cn-26.10.16.apk"
+          # Drop any older feed copy so ImageBuilder prefers these.
+          find "${IB_DIR}" -path '*/luci/luci-app-passwall*' -delete 2>/dev/null || true
+          find "${IB_DIR}" -path '*/luci/luci-i18n-passwall*' -delete 2>/dev/null || true
+          ls -la "${IB_DIR}/packages/"
+
       - name: Build
         working-directory: ${{ env.IB_DIR }}
         run: |
@@ -110,6 +131,7 @@ jobs:
           retention-days: 30
 
       - name: Release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.VERSION }}-ubootmod-${{ github.run_number }}
@@ -121,4 +143,5 @@ jobs:
             | --- | --- |
             | ImmortalWrt | `${{ env.VERSION }}` |
             | Profile | `${{ env.PROFILE }}` |
+            | PassWall | `${{ env.PASSWALL_TAG }}` (vendored from Release) |
             | Packages | `${{ env.EXTRA_PACKAGES }}` |
