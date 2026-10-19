@@ -98,13 +98,10 @@ jobs:
           set -euo pipefail
           PW_BASE="https://github.com/Openwrt-Passwall/openwrt-passwall/releases/download/${PASSWALL_TAG}"
           mkdir -p "${IB_DIR}/packages"
-          curl -fsSL --retry 3 -o "${IB_DIR}/packages/luci-app-passwall.apk" \
+          curl -fsSL --retry 3 -o "${IB_DIR}/packages/luci-app-passwall-26.10.16-r2.apk" \
             "${PW_BASE}/25.12+_luci-app-passwall-26.10.16-r2.apk"
-          curl -fsSL --retry 3 -o "${IB_DIR}/packages/luci-i18n-passwall-zh-cn.apk" \
+          curl -fsSL --retry 3 -o "${IB_DIR}/packages/luci-i18n-passwall-zh-cn-26.10.16.apk" \
             "${PW_BASE}/25.12+_luci-i18n-passwall-zh-cn-26.10.16.apk"
-          # Drop any older feed copy so ImageBuilder prefers these.
-          find "${IB_DIR}" -path '*/luci/luci-app-passwall*' -delete 2>/dev/null || true
-          find "${IB_DIR}" -path '*/luci/luci-i18n-passwall*' -delete 2>/dev/null || true
           ls -la "${IB_DIR}/packages/"
 
       - name: Build
